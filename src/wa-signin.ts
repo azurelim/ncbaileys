@@ -4,6 +4,7 @@ import {
   makeWASocket,
   useMultiFileAuthState,
 } from 'baileys'
+import P from 'pino'
 import { type Boom } from '@hapi/boom'
 import QRCode from 'qrcode'
 import fs from 'fs/promises'
@@ -17,11 +18,7 @@ async function main() {
     console.log('node wa-sign.js WAAccount')
     process.exit()
   }
-  const { error, version } = await fetchLatestBaileysVersion()
-  if (error) {
-    console.log(`session: ${phone} | No connection, check your internet`)
-    process.exit()
-  }
+  const { version } = await fetchLatestBaileysVersion()
 
   const sessionPath = path.join(SESSION_DIR, phone)
   await fs.mkdir(sessionPath, { recursive: true })
@@ -31,36 +28,29 @@ async function main() {
   const sock = makeWASocket({
     auth: state,
     version,
+    logger: P(),
   })
 
-  sock.ev.process(async (events) => {
-    if (events['creds.update']) {
-      await saveCreds()
-      return
+  sock.ev.on('creds.update', saveCreds)
+  sock.ev.on('connection.update', async (update: any) => {
+    const { connection, lastDisconnect, qr } = update
+    if (qr) {
+      console.log(await QRCode.toString(qr, { type: 'terminal' }))
     }
-
-    if (events['connection.update']) {
-      const { connection, lastDisconnect, qr } = events['connection.update']
-      if (qr) {
-        console.log(await QRCode.toString(qr, { type: 'terminal' }))
-        return
-      }
-
+    if (connection === 'close') {
       if (
-        connection === 'close' &&
-        (lastDisconnect?.error as Boom)?.output?.statusCode ===
-          DisconnectReason.restartRequired
+        (lastDisconnect?.error as Boom)?.output?.statusCode !==
+        DisconnectReason.loggedOut
       ) {
         main()
         return
       }
-
-      if (connection === 'open') {
-        console.log('Opened connection')
-        setTimeout(() => process.exit(), 10_000)
-        return
-      }
+      console.log('Connection closed, you are logged out')
+      await fs.rm(sessionPath, { recursive: true })
     }
+  })
+  sock.ev.on('messages.upsert', async () => {
+    setTimeout(() => process.exit(), 10_000)
   })
 }
 
