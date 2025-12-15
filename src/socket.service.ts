@@ -3,18 +3,22 @@ import {
   makeWASocket,
   downloadMediaMessage,
   useMultiFileAuthState,
-} from '@whiskeysockets/baileys'
-import * as Boom from '@hapi/boom'
+  WAMessageKey,
+  WAMessageContent,
+  DisconnectReason,
+  proto,
+} from 'baileys'
+import P from 'pino'
+import { type Boom } from '@hapi/boom'
 import { v4 as uuidv4 } from 'uuid'
 import fs from 'fs/promises'
 import path from 'path'
-
-import { LOG_DIR, NATS_SERVERS, NATS_TOKEN, SESSION_DIR } from './config'
 import { connect, StringCodec } from 'nats'
 import { uploadMedia } from './utils'
+import { LOG_DIR, NATS_SERVERS, NATS_TOKEN, SESSION_DIR } from './config'
+import { loadMessage, saveMessage } from './valkey-mongo-store'
 
 export const sock: any = {}
-export const store: any = {}
 export const sockReady: any = {}
 
 export async function startSock(session: string) {
@@ -23,115 +27,137 @@ export async function startSock(session: string) {
     console.log(`session: ${session} | No connection, check your internet`)
     return startSock(session)
   }
-
   const sessionPath = path.join(SESSION_DIR, session)
-  const storeFilePath = path.join(sessionPath, 'baileys_store.json')
   await fs.mkdir(sessionPath, { recursive: true })
-  try {
-    const uuid = uuidv4()
-    const timestamp = new Date().getTime()
-    const archiveStoreFilePath = path.join(
-      SESSION_DIR,
-      `baileys_store-${timestamp}-${uuid}.json`,
-    )
-    await fs.rename(storeFilePath, archiveStoreFilePath)
-  } catch (error) {
-    console.log(`Error renaming store file: ${error}`)
-  }
-  setInterval(() => {
-    store[session].writeToFile(storeFilePath)
-  }, 10000)
-
   const { state, saveCreds } = await useMultiFileAuthState(sessionPath)
 
   sock[session] = makeWASocket({
     auth: state,
     version,
-    printQRInTerminal: true,
-  })
-  store[session].bind(sock[session].ev)
-
-  sock[session].ev.on('creds.update', saveCreds)
-
-  sock[session].ev.on('connection.update', async (update: any) => {
-    const { connection, lastDisconnect } = update
-    if (connection === 'close') {
-      sockReady[session] = false
-      if (Boom.boomify(lastDisconnect.error).output.statusCode == 401) {
-        await fs.rmdir(sessionPath, { recursive: true })
-      }
-      const shouldReconnect =
-        lastDisconnect && lastDisconnect.error
-          ? Boom.boomify(lastDisconnect.error).output.statusCode
-          : 500
-      console.log(
-        'Connection closed due to',
-        lastDisconnect?.error,
-        ', reconnecting in',
-        shouldReconnect,
-        'ms',
-      )
-      if (shouldReconnect) {
-        setTimeout(() => startSock(session), shouldReconnect)
-      }
-    } else if (connection === 'open') {
-      sockReady[session] = true
-      console.log('Opened connection')
-    }
+    logger: P(),
+    getMessage: async (
+      key: WAMessageKey,
+    ): Promise<WAMessageContent | undefined> => {
+      return loadMessage(key.remoteJid!, key.id!)
+    },
   })
 
-  sock[session].ev.on('messages.upsert', async (m: any) => {
-    const uuid = uuidv4()
-    const timestamp = new Date().getTime()
-    const messageFilePath = path.join(
-      LOG_DIR,
-      `messages-${timestamp}-${uuid}.json`,
-    )
-    await fs.writeFile(messageFilePath, Buffer.from(JSON.stringify(m, null, 2)))
-    const publishedMessage = JSON.parse(JSON.stringify(m))
-    if (!m.messages[0].message) {
+  sock[session].ev.process(async (events: any) => {
+    if (events['connection.update']) {
+      const { connection, lastDisconnect } = events['connection.update']
+      if (connection === 'close') {
+        sockReady[session] = false
+        if (
+          (lastDisconnect?.error as Boom)?.output?.statusCode !==
+          DisconnectReason.loggedOut
+        ) {
+          startSock(session)
+        } else {
+          console.log('Connection closed. You are logged out.')
+          await fs.rm(sessionPath, { recursive: true })
+        }
+      } else if (connection == 'open') {
+        sockReady[session] = true
+      }
       return
     }
-    if (m.messages[0].message.imageMessage) {
-      const buffer = await downloadMediaMessage(m.messages[0], 'buffer', {})
-      const media = await uploadMedia({
-        name: 'image',
-        mimeType: m.messages[0].message.imageMessage.mimetype,
-        buffer,
-      })
-      publishedMessage.messages[0].message.imageMessage['id'] = media.id
-    } else if (m.messages[0].message.videoMessage) {
-      const buffer = await downloadMediaMessage(m.messages[0], 'buffer', {})
-      const media = await uploadMedia({
-        name: 'video',
-        mimeType: m.messages[0].message.videoMessage.mimetype,
-        buffer,
-      })
-      publishedMessage.messages[0].message.videoMessage['id'] = media.id
-    } else if (m.messages[0].message.documentWithCaptionMessage) {
-      const buffer = await downloadMediaMessage(m.messages[0], 'buffer', {})
-      const media = await uploadMedia({
-        name: m.messages[0].message.documentWithCaptionMessage.message
-          .documentMessage.fileName,
-        mimeType:
-          m.messages[0].message.documentWithCaptionMessage.message
-            .documentMessage.mimetype,
-        buffer,
-      })
-      publishedMessage.messages[0].message.documentWithCaptionMessage.message.documentMessage[
-        'id'
-      ] = media.id
+
+    if (events['creds.update']) {
+      await saveCreds()
+      return
     }
-    const nc = await connect({
-      servers: NATS_SERVERS,
-      token: NATS_TOKEN,
-    })
-    const js = nc.jetstream()
-    const sc = StringCodec()
-    await js.publish(
-      `events.ncbaileys.${session}.messages_received`,
-      sc.encode(JSON.stringify(publishedMessage)),
-    )
-    await nc.close()
+
+    if (events['labels.association']) {
+      console.log(events['labels.association'])
+      return
+    }
+
+    if (events['labels.edit']) {
+      console.log(events['labels.edit'])
+      return
+    }
+
+    if (events.call) {
+      console.log('recv call event', events.call)
+      return
+    }
+
+    if (events['messaging-history.set']) {
+      const { chats, contacts, messages, isLatest, progress, syncType } =
+        events['messaging-history.set']
+      if (syncType === proto.HistorySync.HistorySyncType.ON_DEMAND) {
+        console.log(
+          `recv ${chats.length} chats, ${contacts.length} contacts, ${messages.length} msgs (is latest: ${isLatest}, progress: ${progress}%), type: ${syncType}`,
+        )
+      }
+      return
+    }
+
+    if (events['messages.upsert']) {
+      const m = events['messages.upsert']
+      const uuid = uuidv4()
+      const timestamp = new Date().getTime()
+      const messageFilePath = path.join(
+        LOG_DIR,
+        `messages-${timestamp}-${uuid}.json`,
+      )
+      await fs.writeFile(
+        messageFilePath,
+        Buffer.from(JSON.stringify(m, null, 2)),
+      )
+      saveMessage(m.messages[0])
+      const publishedMessage = JSON.parse(JSON.stringify(m))
+      if (!m.messages[0].message) {
+        return
+      }
+      if (m.messages[0].key.remoteJid.endsWith('@g.us')) {
+        const metadata = await sock[session].groupMetadata(
+          m.messages[0].key.remoteJid,
+        )
+        publishedMessage.messages[0].key['subject'] = metadata.subject
+      }
+      if (m.messages[0].message.imageMessage) {
+        const buffer = await downloadMediaMessage(m.messages[0], 'buffer', {})
+        const media = await uploadMedia({
+          name: 'image',
+          mimeType: m.messages[0].message.imageMessage.mimetype,
+          buffer,
+        })
+        publishedMessage.messages[0].message.imageMessage['id'] = media.id
+      } else if (m.messages[0].message.videoMessage) {
+        const buffer = await downloadMediaMessage(m.messages[0], 'buffer', {})
+        const media = await uploadMedia({
+          name: 'video',
+          mimeType: m.messages[0].message.videoMessage.mimetype,
+          buffer,
+        })
+        publishedMessage.messages[0].message.videoMessage['id'] = media.id
+      } else if (m.messages[0].message.documentWithCaptionMessage) {
+        const buffer = await downloadMediaMessage(m.messages[0], 'buffer', {})
+        const media = await uploadMedia({
+          name: m.messages[0].message.documentWithCaptionMessage.message
+            .documentMessage.fileName,
+          mimeType:
+            m.messages[0].message.documentWithCaptionMessage.message
+              .documentMessage.mimetype,
+          buffer,
+        })
+        publishedMessage.messages[0].message.documentWithCaptionMessage.message.documentMessage[
+          'id'
+        ] = media.id
+      }
+      const nc = await connect({
+        servers: NATS_SERVERS,
+        token: NATS_TOKEN,
+      })
+      const js = nc.jetstream()
+      const sc = StringCodec()
+      await js.publish(
+        `events.ncbaileys.${session}.messages_received`,
+        sc.encode(JSON.stringify(publishedMessage)),
+      )
+      await nc.close()
+      return
+    }
   })
 }

@@ -11,20 +11,22 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
-    "@hono/node-server": "^1.13.1",
-    "@whiskeysockets/baileys": "^6.7.7",
-    "crypto": "^1.0.1",
-    "dotenv": "^16.4.5",
-    "jimp": "^0.16.13",
+    "@hono/node-server": "^1.19.7",
+    "@types/qrcode": "^1.5.6",
+    "@valkey/valkey-glide": "^2.2.1",
+    "axios": "^1.13.2",
+    "baileys": "^7.0.0-rc.9",
+    "dotenv": "^16.6.1",
     "mime-types": "^2.1.35",
-    "nats": "^2.28.2",
-    "qrcode-terminal": "^0.12.0",
+    "mongodb": "^7.0.0",
+    "nats": "^2.29.3",
+    "pino": "^10.1.0",
+    "qrcode": "^1.5.4",
     "uuid": "^10.0.0"
   },
   "devDependencies": {
     "@types/mime-types": "^2.1.4",
-    "@types/qrcode-terminal": "^0.12.2",
     "@types/uuid": "^10.0.0",
-    "typescript": "^5.6.2"
+    "typescript": "^5.9.3"
   }
 }

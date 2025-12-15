@@ -4,8 +4,9 @@ import { v4 as uuidv4 } from 'uuid'
 import path from 'path'
 import fs from 'fs/promises'
 import { LOG_DIR, MEDIA_BASE_URL, SEND_RESPONSE_TEMPLATE } from './config'
-import { sock, sockReady, store } from './socket.service'
+import { sock, sockReady } from './socket.service'
 import { uploadMedia } from './utils'
+import { loadMessage } from './valkey-mongo-store'
 
 export async function getMediaUrl(c: Context) {
   const mediaId = c.req.param('mediaId')
@@ -64,23 +65,26 @@ export async function postMessage(c: Context) {
   const payload = await c.req.json()
   let sent = null
   let quoted = null
+  const to = payload.to.endsWith('@g.us')
+    ? payload.to
+    : `${payload.to}@s.whatsapp.net`
   if (payload.context?.message_id) {
-    quoted = await store[phoneId].loadMessage(
-      `${payload.to}@s.whatsapp.net`,
-      payload.context.message_id,
-    )
+    quoted = await loadMessage(to, payload.context.message_id)
   }
   if (payload.type == 'text') {
     if (quoted) {
+      console.log('quoted message:')
+      console.log(JSON.stringify(quoted, null, 2))
+      console.log('-- eof quoted message --')
       sent = await sock[phoneId].sendMessage(
-        `${payload.to}@s.whatsapp.net`,
+        to,
         {
           text: payload.text.body,
         },
         { quoted },
       )
     } else {
-      sent = await sock[phoneId].sendMessage(`${payload.to}@s.whatsapp.net`, {
+      sent = await sock[phoneId].sendMessage(to, {
         text: payload.text.body,
       })
     }
@@ -103,7 +107,7 @@ export async function postMessage(c: Context) {
           { quoted },
         )
       } else {
-        sent = await sock[phoneId].sendMessage(`${payload.to}@s.whatsapp.net`, {
+        sent = await sock[phoneId].sendMessage(to, {
           image: Buffer.from(mediaResponse.data),
           caption: payload.image.caption,
         })
@@ -132,7 +136,7 @@ export async function postMessage(c: Context) {
           { quoted },
         )
       } else {
-        sent = await sock[phoneId].sendMessage(`${payload.to}@s.whatsapp.net`, {
+        sent = await sock[phoneId].sendMessage(to, {
           video: Buffer.from(mediaResponse.data),
           caption: payload.video.caption,
           gifPlayback: true,
@@ -153,7 +157,7 @@ export async function postMessage(c: Context) {
       })
       if (quoted) {
         sent = await sock[phoneId].sendMessage(
-          `${payload.to}@s.whatsapp.net`,
+          to,
           {
             document: Buffer.from(mediaResponse.data),
             caption: payload.document.caption,
@@ -162,7 +166,7 @@ export async function postMessage(c: Context) {
           { quoted },
         )
       } else {
-        sent = await sock[phoneId].sendMessage(`${payload.to}@s.whatsapp.net`, {
+        sent = await sock[phoneId].sendMessage(to, {
           document: Buffer.from(mediaResponse.data),
           caption: payload.document.caption,
           fileName: payload.document.filename,

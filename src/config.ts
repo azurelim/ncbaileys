@@ -13,3 +13,11 @@ export const JWT_SECRET = process.env.JWT_SECRET || ''
 export const SEND_RESPONSE_TEMPLATE = process.env.SEND_RESPONSE_TEMPLATE || '{}'
 export const MEDIA_BASE_URL =
   process.env.MEDIA_BASE_URL || 'http://localhost:3000/media'
+
+export const MONGODB_URL =
+  process.env.MONGODB_URL || 'mongodb://127.0.0.1:27017/?directConnection=true'
+
+export const MONGODB_DATABASE = process.env.MONGODB_DATABASE || 'baileys'
+
+export const VALKEY_HOST = process.env.VALKEY_HOST || 'localhost'
+export const VALKEY_PORT = Number(process.env.VALKEY_PORT || 6379)

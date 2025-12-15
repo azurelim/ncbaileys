@@ -1,13 +1,14 @@
 import {
+  DisconnectReason,
   fetchLatestBaileysVersion,
   makeWASocket,
   useMultiFileAuthState,
-} from '@whiskeysockets/baileys'
-import { SESSION_DIR } from './config'
-
-import * as Boom from '@hapi/boom'
+} from 'baileys'
+import { type Boom } from '@hapi/boom'
+import QRCode from 'qrcode'
 import fs from 'fs/promises'
 import path from 'path'
+import { SESSION_DIR } from './config'
 
 async function main() {
   const phone = process.argv[2]
@@ -30,34 +31,35 @@ async function main() {
   const sock = makeWASocket({
     auth: state,
     version,
-    printQRInTerminal: true,
   })
 
-  sock.ev.on('creds.update', saveCreds)
+  sock.ev.process(async (events) => {
+    if (events['creds.update']) {
+      await saveCreds()
+      return
+    }
 
-  sock.ev.on('connection.update', async (update: any) => {
-    const { connection, lastDisconnect } = update
-    if (connection === 'close') {
-      if (Boom.boomify(lastDisconnect.error).output.statusCode == 401) {
-        await fs.rmdir(sessionPath, { recursive: true })
+    if (events['connection.update']) {
+      const { connection, lastDisconnect, qr } = events['connection.update']
+      if (qr) {
+        console.log(await QRCode.toString(qr, { type: 'terminal' }))
+        return
       }
-      const shouldReconnect =
-        lastDisconnect && lastDisconnect.error
-          ? Boom.boomify(lastDisconnect.error).output.statusCode
-          : 500
-      console.log(
-        'Connection closed due to',
-        lastDisconnect?.error,
-        ', reconnecting in',
-        shouldReconnect,
-        'ms',
-      )
-      if (shouldReconnect) {
-        setTimeout(() => main(), shouldReconnect)
+
+      if (
+        connection === 'close' &&
+        (lastDisconnect?.error as Boom)?.output?.statusCode ===
+          DisconnectReason.restartRequired
+      ) {
+        main()
+        return
       }
-    } else if (connection === 'open') {
-      console.log('Opened connection')
-      setTimeout(() => process.exit(), 10000)
+
+      if (connection === 'open') {
+        console.log('Opened connection')
+        setTimeout(() => process.exit(), 10_000)
+        return
+      }
     }
   })
 }
