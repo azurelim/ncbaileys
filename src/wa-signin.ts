@@ -1,4 +1,5 @@
 import {
+  Browsers,
   DisconnectReason,
   fetchLatestBaileysVersion,
   makeWASocket,
@@ -29,6 +30,7 @@ async function main() {
     auth: state,
     version,
     logger: P(),
+    browser: Browsers.ubuntu('Firefox'),
   })
 
   sock.ev.on('creds.update', saveCreds)

@@ -1,4 +1,5 @@
 import {
+  Browsers,
   fetchLatestBaileysVersion,
   makeWASocket,
   downloadMediaMessage,
@@ -32,6 +33,7 @@ export async function startSock(session: string) {
     auth: state,
     version,
     logger: P(),
+    browser: Browsers.ubuntu('Firefox'),
     getMessage: async (
       key: WAMessageKey,
     ): Promise<WAMessageContent | undefined> => {
