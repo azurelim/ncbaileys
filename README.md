@@ -217,7 +217,9 @@ WhatsApp Messages
 - Process pesan sesuai business logic
 - Simpan/sync ke database atau external services
 
-Dokumentasi ncbaileyproc: lihat repository ncbaileyproc untuk detail processing logic.
+📚 **Dokumentasi ncbaileyproc:** https://github.com/wardix/ncbaileys-processor
+
+Lihat repository tersebut untuk detail tentang message processing logic dan business logic implementation.
 
 ## Event Stream (NATS)
 
