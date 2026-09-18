@@ -191,6 +191,34 @@ Fetch metadata media yang sudah diupload.
 }
 ```
 
+## Architecture & Integration
+
+ncbaileys adalah bagian dari sistem WhatsApp yang lebih besar:
+
+```
+WhatsApp Messages
+       ↓
+   ncbaileys (service ini)
+       ↓
+   NATS JetStream
+       ↓
+   ncbaileyproc (consumer)
+       ↓
+   Business Logic / Database / External APIs
+```
+
+**ncbaileys** bertugas:
+- Menghubung ke WhatsApp via Baileys
+- Menerima & mengirim pesan
+- Publish event ke NATS
+
+**ncbaileyproc** bertugas:
+- Subscribe ke event dari NATS
+- Process pesan sesuai business logic
+- Simpan/sync ke database atau external services
+
+Dokumentasi ncbaileyproc: lihat repository ncbaileyproc untuk detail processing logic.
+
 ## Event Stream (NATS)
 
 Setiap pesan masuk dipublikasikan ke NATS JetStream:
